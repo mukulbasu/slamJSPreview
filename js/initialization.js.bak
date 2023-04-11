@@ -1,0 +1,242 @@
+let debugFile = window.location.hash === ""?"debug":window.location.hash.split("#")[1];
+console.log("DebugFile ", window.location.hash, debugFile);
+
+const fetchData = async (debugFile, search) => {
+    console.log("Search", search);
+    const response = await fetch('/debug/'+debugFile+'/'+search);
+    const respJson = await response.json();
+    console.log(respJson);
+    const resp = respJson.lines.map((line) => {
+        // console.log("Line ", line);
+        const values = line.split(":");
+        // console.log("Values", values);
+        const name = values[0];
+        const result = {name};
+        values[1].split(";").forEach(value => {
+            const list = value.split("=");
+            result[list[0]] = list[1];
+        });
+        return result;
+    })
+    return resp;
+}
+
+const fetchDataKey = async (debugFile, search, key) => {
+    const resp = await fetchData(debugFile, search);
+    console.log("RESP", resp);
+    return resp.length>0?resp[0][key]:"None";
+}
+
+const Circle = (obj) => {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    for(prop in obj) {
+        circle.setAttribute(prop, obj[prop]);
+    }
+    return circle;
+}
+
+let lastCircleNode = null;
+let lastKp = null;
+const INLIER_COLOR = 'rgb(0,255,0)';
+const INLIER_COLOR_HIGHLIGHT = 'rgb(0,128,255)';
+const OUTLIER_COLOR = 'rgb(255,128,0)';
+const OUTLIER_COLOR_HIGHLIGHT = 'rgb(255,0,0)';
+let frameIndex = 0;
+let width = 0;
+let height = 0;
+let landmarkFrames = [];
+
+let landmarkIndex = 0;
+const compare = ( a, b ) => {
+    if ( Number(a) < Number(b)){
+        return -1;
+    }
+    if ( Number(a) > Number(b)){
+        return 1;
+    }
+    return 0;
+}
+
+const getColor = (kp, highlight) => {
+    if (kp.INLIER === "1") 
+        if (highlight) return INLIER_COLOR_HIGHLIGHT;
+        else return INLIER_COLOR;
+    else
+        if (highlight) return OUTLIER_COLOR_HIGHLIGHT;
+        else return OUTLIER_COLOR;
+}
+
+const getWidth = (kp) => kp.FRAMES.split(",").length > 3? 3:1;
+
+const drawKeypoints = async (poseFid, poseFrame, lid = "-1") => {
+    const kpDetails = await fetchData(debugFile, "FrameKP:POSE_FID="+poseFid+";FID="+poseFrame+";");
+    console.log("KP Details", kpDetails);
+    const drawNode = document.getElementById("DrawWindow");
+    drawNode.innerHTML = '';
+    
+    let count = 0;
+    let inlierCount = 0;
+    kpDetails.forEach(kp => {
+        const circleNode = Circle({
+            'cx': Number(kp.X)+width/2,
+            'cy': Number(kp.Y)+height/2,
+            'r': 15,
+            'stroke': getColor(kp, false),
+            'stroke-width': getWidth(kp),
+            'fill-opacity': 0.1,
+            'class': 'showCircle',
+        });
+        drawNode.appendChild(circleNode);
+        circleNode.onclick = event => {
+            console.log("Clicked on Landmark:", kp.LID, "; KP index", kp.KPID);
+            if (null != lastCircleNode) {
+                lastCircleNode.setAttribute('stroke', getColor(lastKp, false));
+                lastCircleNode.setAttribute('fill-opacity', 0.1);
+            }
+            circleNode.setAttribute('stroke', getColor(kp, true));
+            circleNode.setAttribute('fill-opacity', 0.4);
+            lastCircleNode = circleNode;
+            lastKp = kp;
+                    
+            document.getElementById("LID").innerHTML = kp.LID;
+            document.getElementById("KPID").innerHTML = kp.KPID;
+            document.getElementById("KPTrans").innerHTML = kp.TX+", "+kp.TY+", "+kp.TZ;
+            document.getElementById("Distance").innerHTML = Math.round(100 * Math.sqrt(Math.pow(Number(kp.TX), 2)+Math.pow(Number(kp.TY), 2)+Math.pow(Number(kp.TZ), 2)))/100;
+            document.getElementById("KPXY").innerHTML = kp.X+", "+kp.Y;
+            document.getElementById("PXY").innerHTML = kp.PX+", "+kp.PY;
+            document.getElementById("INLIER").innerHTML = kp.INLIER;
+            document.getElementById("REASON").innerHTML = kp.REASON;
+            document.getElementById("SIZE").innerHTML = kp.SIZE;
+            document.getElementById("FRAMES").innerHTML = kp.FRAMES.split(",").filter(ele => ele !== "").sort((a, b) => Number(a)-Number(b)).join(", ");
+            landmarkFrames = kp.FRAMES.replace(/(^,)|(,$)/g, "").split(",").sort(compare);
+        };
+        if (lid === "-1") {
+            if (count == 0) circleNode.onclick();
+        } else {
+            if (lid === kp.LID) circleNode.onclick();
+        }
+        if (kp.INLIER == "1") inlierCount++;
+        count++;
+    })
+
+    document.getElementById("INLIERCNT").innerHTML = inlierCount;
+    document.getElementById("TOTALCNT").innerHTML = count;
+}
+
+const onFrameSelected = async (poseFid, frameDetails, lid = "-1") => {
+    document.getElementById("PoseFrame").innerHTML = frameDetails.FID;
+    document.getElementById("PoseTrans").innerHTML = frameDetails.TX+", "+frameDetails.TY+", "+frameDetails.TZ;
+    document.getElementById("PoseRot").innerHTML = frameDetails.RX+", "+frameDetails.RY+", "+frameDetails.RZ;
+
+    fetchDataKey(debugFile, "FRAME_PATH:FID="+frameDetails.FID+";", "PATH").then((link) => document.getElementById("Img").src=link);
+    fetchDataKey(debugFile, "POSE_TIME:POSE_FID="+frameDetails.FID+";", "TIME").then(time => document.getElementById("PoseTime").innerHTML=time)
+    await drawKeypoints(poseFid, frameDetails.FID, lid);
+    // document.getElementById("Img").src=await fetchDataKey(debugFile, "FRAME_PATH:FID="+frameDetails.FID+";", "PATH");
+    // document.getElementById("PoseTime").innerHTML=await fetchDataKey(debugFile, "POSE_TIME:POSE_FID="+frameDetails.FID+";", "TIME");
+}
+
+const onPoseFidSelected = async (poseFid) => {
+    const frames = await fetchData(debugFile, "FramePose:POSE_FID="+poseFid+";");
+    if (frames.length == 0) {
+        document.getElementById("NotInitialized").style.visibility = 'visible';
+        return;
+    }
+    frames.sort((a, b) => Number(a.FID) - Number(b.FID));
+
+    
+    document.getElementById("NextFrame").onclick = (ev) => {
+        frameIndex++;
+        if (frameIndex >= frames.length) frameIndex = 0;
+        console.log("Frame Index", frameIndex);
+        onFrameSelected(poseFid, frames[frameIndex]);
+    }
+    document.getElementById("PrevFrame").onclick = (ev) => {
+        frameIndex--;
+        if (frameIndex < 0 ) frameIndex = frames.length-1;
+        console.log("Frame Index", frameIndex);
+        onFrameSelected(poseFid, frames[frameIndex]);
+    }
+    landmarkIndex = 0;
+    document.onkeydown = (e) => {
+        e = e || window.event;
+        console.log("Key ", e.key);
+        if (e.key === "ArrowLeft") {
+            document.getElementById("PrevFrame").onclick();
+        } else if (e.key === "ArrowRight") {
+            document.getElementById("NextFrame").onclick();
+        } else if (e.key === "ArrowUp") {
+            // up arrow
+            const circles = document.getElementsByClassName("showCircle");
+            landmarkIndex--;
+            if (landmarkIndex < 0) landmarkIndex = circles.length - 1;
+            circles[landmarkIndex].onclick();
+        } else if (e.key === "ArrowDown") {
+            // down arrow
+            const circles = document.getElementsByClassName("showCircle");
+            landmarkIndex++;
+            if (landmarkIndex >= circles.length) landmarkIndex = 0;
+            circles[landmarkIndex].onclick();
+        } else if ((e.key === "n" || e.key === 'p') && e.key.length == 1) {
+            for (let i = 0; i < landmarkFrames.length; i++) {
+                if (landmarkFrames[i] === frames[frameIndex].FID) {
+                    if (e.key === 'n') {
+                        i = i+1;
+                        if (i >= landmarkFrames.length) i = 0;
+                    } else {
+                        i = i-1;
+                        if (i < 0) i = landmarkFrames.length - 1;
+                    }
+                    for (let j = 0; j < frames.length; j++) {
+                        if (frames[j].FID === landmarkFrames[i]) {
+                            frameIndex = j;
+                            onFrameSelected(poseFid, frames[frameIndex], document.getElementById("LID").innerHTML);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    onFrameSelected(poseFid, frames[frameIndex]);
+}
+
+const start = async () => {
+    const poses = await fetchData(debugFile, "FrameInitialization:");
+    poses.sort((a, b) => Number(b.POSE_FID) - Number(a.POSE_FID));
+    const poseFidNode = document.getElementById("poseFid");
+    poses.forEach(pose => {
+        poseFidNode.add(new Option(pose.POSE_FID, pose.POSE_FID), undefined);
+    });
+    poseFidNode.onchange = (e) => onPoseFidSelected(e.target.value);
+    onPoseFidSelected(poseFidNode.value);
+
+    const dimsData = await fetchData(debugFile, "IMG_DIMS:");
+    width = Number(dimsData[0].WIDTH);
+    height = Number(dimsData[0].HEIGHT);
+    console.log("Dimensions", width, height);
+
+    const originFrame = await fetchData(debugFile, "OriginFrame:");
+    console.log("origin frame ", originFrame);
+    if (originFrame.length == 0) {
+        document.getElementById("NotInitialized").style.visibility = 'visible';
+        return;
+    } else {
+        document.getElementById("OriginFrameId").innerHTML = originFrame[0].FID;
+        fetchDataKey(debugFile, "FRAME_PATH:FID="+originFrame[0].FID+";", "PATH").then((link) => document.getElementById("ImgOrigin").src=link);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", async function(event) {
+    const fname = document.getElementById("fname");
+    fname.onchange = () => {
+        console.log("fname change triggered ", fname.value);
+        if (fname.value === "") debugFile = "debug";
+        else debugFile = fname.value;
+        window.location.hash = "#"+debugFile;
+        console.log("Debug file is now ", debugFile);
+        start();
+    }
+    
+    start();
+});
