@@ -124,22 +124,40 @@
         position: absolute;
         left: 0px;
         bottom: 200px;
-        z-index: 102;
+        z-index: 109;
         width: 100%;
       }
       #threejs-container {
         position: absolute;
         left: 0px;
-        top: 20px;
+        top: 0px;
+        z-index: 108;
+        width: 480px;
+        height: 640px;
+      }
+      #pose-container {
+        position: absolute;
+        left: 0px;
+        top: 640px;
         z-index: 108;
         width: 100%;
-        height: 100%;
+        height: 900px;
       }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script> -->
+    <script async src="/js/es-module-shims.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.138.3/build/three.module.js"
+            }
+        }
+    </script>
   </head>
   <body>
-    <script async type="text/javascript" src="js/slamWrapper.js"></script>
+    <!-- <script type="module" src="js/TrackballControls.js"></script> -->
+    <script async type="module" src="js/slamWrapper.js"></script>
+    <!-- <script type="module" src="js/pose.js"></script> -->
     <video autoplay="true" id="srcVideo" height="640" width="480"></video>
     <canvas  height=640 width=480 id="canvasVideo"></canvas>
     <button id="toggleView">Toggle View</button>
@@ -158,6 +176,7 @@
       <div style="width:100%"><h2 style="width:100px;float:left">Z:</h2><h2 style="width:100px;float:left" id="pose3s"></h2></div>
     </div>
     <div id="threejs-container"></div>
+    <canvas id="pose-container"></canvas>
   </body>
 </html>
 

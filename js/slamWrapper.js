@@ -1,5 +1,7 @@
+import * as THREE from 'three';
+import { TrackballControls } from '/js/TrackballControls.js';
 
-THREE.DeviceOrientationControls = function( object ) {
+const DeviceOrientationControls = function( object ) {
 
 	var scope = this;
 
@@ -85,8 +87,8 @@ THREE.DeviceOrientationControls = function( object ) {
 		var orient = scope.screenOrientation ? THREE.Math.degToRad( scope.screenOrientation ) : 0; // O
 
 		setObjectQuaternion( scope.object.quaternion, alpha, beta, gamma, orient );
+    scope.object.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), 22/7);
 		this.alpha = alpha;
-
 	};
 
 	this.updateAlphaOffsetAngle = function( angle ) {
@@ -143,7 +145,9 @@ const captureImage = () => {
   startTime = Date.now();
   ctx.drawImage(srcVideo, 0, 0, canvas.width, canvas.height);
   const imageData = ctx.getImageData(0, 0, width, height);
-  slamWorker.postMessage({operation: "addImage", imageData: imageData, alpha, beta, gamma});
+  const rot = camera.rotation;
+  slamWorker.postMessage({operation: "addImage", imageData: imageData,
+      x: rot.x, y: rot.y, z: rot.z, order: rot.order});
   return imageData;
 };
 
@@ -155,93 +159,68 @@ const storeImage = () => {
   startTime = Date.now();
   ctx.drawImage(srcVideo, 0, 0, canvas.width, canvas.height);
   const imageData = ctx.getImageData(0, 0, width, height);
-  imgs.push({ imageData, alpha, beta, gamma });
+  const rot = camera.rotation;
+  imgs.push({ imageData, x: rot.x, y: rot.y, z: rot.z, order: rot.order });
 };
 
+let smoothedAcc = 0;
+let staticCount = 0;
+let moved = false, stored = false;
 function handleAcceleration(event) {
-  if (event.acceleration.x * lastAccX < 0) {
-    let length = Math.round((accXs.length + 1)/2);
-    length = length < 0? 0 : length;
-    const accXs1 = accXs.slice(0, length);
-    accXs1.forEach( acc => {
-      velX += acc;
-      distX += Math.abs(velX);
-    });
-    midImgs.push(imgs[0]);
-    if (midImgs.length > 10) midImgs.shift();
-    edgeImgs.push(imgs[length]);
-    if (edgeImgs.length > 10) edgeImgs.shift();
-    
-    console.log("Dist total ", distX, ", ", avgDistX, ", ", accXs.length);
-    if (distX > 500) {
-      if (0 == avgDistX) {
-        avgDistX = distX;
-        countX = 1;
-      // } else if (distX > minX && distX < maxX) {
-      } else {
-        avgDistX = avgDistX*0.8 + 0.2*distX;
-        countX += 1;
-      }
+  smoothedAcc = 0.8*smoothedAcc + 0.2*event.acceleration.x;
+  if (Math.abs(event.acceleration.x) < 0.5) {
+    staticCount++;
+    if (staticCount >= 6) {
+      console.log("Storing image");
+      storeImage();
+      stored = true;
     }
-    initDists.push(distX);
-
-    // 3<---2<---1
-    // --------->4
-    // 5<---------
-    // --------->6
-    //Check if ready for initialization
-    if (initDists.length > 6 && avgDistX > 500) {
-      let totalDist = 0;
-      let i = 0;
-      for (; i < 6; i++) {
-        const val = initDists[initDists.length - 1 - i];
-        if (val > avgDistX * 1.4 || val < avgDistX * 0.6) break;
-        totalDist += val;
-      }
-      if (i == 6) {
-        //ready for initialization
-        //extract 5 edge images and 1 mid image
-        if (edgeImgs.length < 5) console.error("Not enough initImgs");
-        if (midImgs.length < 5) console.error("Not enough midImgs");
-        const initImgs = [];
-        initImgs.push(midImgs[midImgs.length - 5]);
-        initImgs.push(edgeImgs[edgeImgs.length - 5]);
-        initImgs.push(edgeImgs[edgeImgs.length - 4]);
-        initImgs.push(edgeImgs[edgeImgs.length - 3]);
-        initImgs.push(edgeImgs[edgeImgs.length - 2]);
-        initImgs.push(edgeImgs[edgeImgs.length - 1]);
-        
-        totalDist = totalDist/100;
-        slamWorker.postMessage({operation: "initializeMap", initImgs, totalDist});
-        window.removeEventListener("devicemotion", handleAcceleration);
-        document.getElementById("status").innerHTML = "Initializing";
-      }
+    if (staticCount >= 9 && moved == true) {
+      console.log("Initializing");
+      if (imgs.length < 6) console.error("Not enough initImgs");
+      const initImgs = [];
+      // initImgs.push(imgs[imgs.length - 10]);
+      // initImgs.push(imgs[imgs.length - 9]);
+      // initImgs.push(imgs[imgs.length - 8]);
+      // initImgs.push(imgs[imgs.length - 7]);
+      initImgs.push(imgs[imgs.length - 6]);
+      initImgs.push(imgs[imgs.length - 5]);
+      initImgs.push(imgs[imgs.length - 4]);
+      initImgs.push(imgs[imgs.length - 3]);
+      initImgs.push(imgs[imgs.length - 2]);
+      initImgs.push(imgs[imgs.length - 1]);
+      console.log("InitMsgs being sent ", initImgs);
+      
+      slamWorker.postMessage({operation: "initializeMap", initImgs, totalDist:10});
+      window.removeEventListener("devicemotion", handleAcceleration);
+      distX = 0, velX = 0, countX = 0, avgDistX = 0;
+      lastAccX = -1, accXs = [], imgs = [], edgeImgs = [], midImgs = [], initDists = [];
+      document.getElementById("status").innerHTML = "Initializing";
+      moved = false;
+    } else if (imgs.length >= 9) {
+      const imgsLen = imgs.length;
+      console.log("Deleting", imgs.length);
+      for (let i = 0; i < 3; i++) imgs.shift();//Delete all except last 3
+      console.log("Deleted", imgs.length);
     }
-
-    distX = 0;
-    velX = 0;
-    const accXs2 = accXs.slice(length);
-    accXs2.forEach(acc => {
-      velX += acc;
-      distX += Math.abs(velX);
-    });
-    accXs = [];
-    imgs = [];
+  } else {
+    staticCount = 0;
+    if (stored == true) moved = false;
+    if (Math.abs(event.acceleration.x) > 1) {
+      moved = true;
+      stored = false;
+    }
   }
-  accXs.push(event.acceleration.x);
-  storeImage();
 
-  if (event.acceleration.x != 0) lastAccX = event.acceleration.x;
-
-  // console.log("Values :", trim(event.acceleration.x), ", ", alpha);
+  console.log("Values :", trim(event.acceleration.x), ", ", staticCount, ", ", moved);
 }
 
-
+let startTime;
 const startVideo = (mediaStream) => {
   console.log("Got the web cam stream");
   srcVideo.srcObject = mediaStream;
 
-  let startTime = Date.now();
+  startTime = Date.now();
   slamWorker.postMessage({operation: "start", width, height});
 
   window.addEventListener("deviceorientation", handleOrientation);
@@ -251,15 +230,16 @@ const startVideo = (mediaStream) => {
 
 const threejsRender = () => {
   const threejsContainer = document.getElementById("threejs-container");
-  threejsWidth = threejsContainer.offsetWidth;
-  threejsHeight = threejsContainer.offsetHeight;
+  const threejsWidth = threejsContainer.offsetWidth;
+  const threejsHeight = threejsContainer.offsetHeight;
   console.log(threejsWidth, threejsHeight);
   // scene
   const scene = new THREE.Scene();
   // camera
   camera = new THREE.PerspectiveCamera(30, threejsWidth / threejsHeight, 0.1, 1000);
   camera.position.set(0, 0, 0);
-  deviceOrientationControls = new THREE.DeviceOrientationControls(camera);
+  camera.up.set(0, -1, 0);
+  deviceOrientationControls = new DeviceOrientationControls(camera);
 
   // Light
   const ambientLight = new THREE.AmbientLight(0xffffff, 1);
@@ -270,17 +250,17 @@ const threejsRender = () => {
   pointLight.position.z = 4;
   scene.add(pointLight);
 
-  const geometry = new THREE.BoxGeometry( 2, 2, 2 ); 
+  const geometry = new THREE.BoxGeometry( 1, 1, 1); 
   const material = new THREE.MeshBasicMaterial( {color: 0x00ff00} ); 
   const cube = new THREE.Mesh( geometry, material ); 
-  cube.position.set(0, -10, 50);
+  cube.position.set(0, -3, -27);
   // camera.lookAt(0, 0, 500);
   scene.add( cube );
   
   // responsiveness
   window.addEventListener('resize', () => {
-    threejsWidth = threejsContainer.offsetWidth;
-    threejsHeight = threejsContainer.offsetHeight;
+    const threejsWidth = threejsContainer.offsetWidth;
+    const threejsHeight = threejsContainer.offsetHeight;
     camera.aspect = threejsWidth / threejsHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(threejsWidth, threejsHeight);
@@ -302,6 +282,130 @@ const threejsRender = () => {
   renderer.render(scene, camera);
   animate();
 }
+const cameraObj = (current, origin) => {
+  const result = new THREE.Group();
+  const group = new THREE.Group();
+
+  const geometry = new THREE.ConeGeometry(2, 2, 4);
+
+
+  const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+  //Origin is Red, current is Blue
+  const color = current ? 0x0000FF : origin ? 0xFF0000 : 0x00FF00;
+  const meshMaterial = new THREE.MeshPhongMaterial({ color: color, emissive: 0x072534, side: THREE.DoubleSide, flatShading: true });
+
+  group.add(new THREE.LineSegments(geometry, lineMaterial));
+  group.add(new THREE.Mesh(geometry, meshMaterial));
+  group.rotateX(-Math.PI / 2);
+  group.rotateY(Math.PI / 4);
+  result.add(group);
+  return result;
+}
+
+let poseScene;
+const poseRender = () => {
+  const floorDepth = 250;
+  const gridSize = floorDepth * 2;
+  const floorPositions = [0, -floorDepth, 0];
+  let scene = new THREE.Scene();
+  poseScene = scene;
+  const canvas = document.getElementById("pose-container");
+  const renderer = new THREE.WebGLRenderer({ canvas: canvas });
+  renderer.setSize(canvas.offsetWidth, canvas.offsetHeight);
+
+  const dirLight1 = new THREE.DirectionalLight(0xffffff);
+  dirLight1.position.set(1000, 1000, -1000);
+  scene.add(dirLight1);
+
+  const dirLight2 = new THREE.DirectionalLight(0xffffff);
+  dirLight2.position.set(-1000, -1000, -1000);
+  scene.add(dirLight2);
+
+  const dirLight3 = new THREE.DirectionalLight(0xffffff);
+  dirLight3.position.set(0, 0, 1000);
+  scene.add(dirLight3);
+
+  const ambientLight = new THREE.AmbientLight(0x222222);
+  scene.add(ambientLight);
+
+  scene.background = new THREE.Color(0xffffff);
+  scene.fog = new THREE.FogExp2(0xcccccc, 0.002);
+
+  const floor = new THREE.GridHelper(gridSize, 15, 0x808080, 0x808080);
+  floor.position.set(...floorPositions);
+  // scene.add( floor );
+
+  const pos = [
+      [0, floorDepth, 0],
+      [0, -floorDepth, 0],
+      [floorDepth, 0, 0],
+      [-floorDepth, 0, 0],
+      [0, 0, floorDepth],
+      [0, 0, -floorDepth],
+  ]
+  for (let i = 0; i < 6; i++) {
+      const floors = new THREE.GridHelper(gridSize, 5, 0x808080, 0x808080);
+      floors.position.set(...pos[i]);
+      if (i > 3) {
+          floors.rotation.set(Math.PI / 2, 0, 0);
+      } else if (i > 1) {
+          floors.rotation.set(0, 0, Math.PI / 2);
+      }
+      scene.add(floors);
+  }
+
+
+  const camera2 = new THREE.PerspectiveCamera(75, canvas.offsetWidth / canvas.offsetHeight, 0.1, 100000);
+  camera2.position.set(5, 8, -30);
+  camera2.up.set(0, 1, 0);
+  scene.add(camera2);
+
+  const controls = new TrackballControls(camera2, renderer.domElement);
+
+  controls.rotateSpeed = 1.0;
+  controls.zoomSpeed = 1.2;
+  controls.panSpeed = 0.8;
+
+  controls.keys = ['KeyA', 'KeyS', 'KeyD'];
+
+  window.addEventListener('resize', () => {
+      camera2.aspect = canvas.offsetWidth / canvas.offsetHeight;
+      camera2.updateProjectionMatrix();
+      renderer.setSize(canvas.offsetWidth, canvas.offsetHeight);
+
+      controls.handleResize();
+  });
+  function animate() {
+    requestAnimationFrame(animate);
+
+    controls.update();
+    renderer.render(scene, camera2);
+  }
+  animate();
+}
+
+let keyframeTrans;
+let latestTrans;
+
+const renderPoseFrames = () => {
+  const delList = [];
+  poseScene.children.forEach(child => {
+    if (child.name === "cameraObj") delList.push(child);
+  });
+  delList.forEach(child => poseScene.remove(child));
+
+  const allTrans = [...keyframeTrans, latestTrans];
+  for (const index in allTrans) {
+      const trans = allTrans[index];
+      if (trans) {
+        const obj = cameraObj(index == allTrans.length-1, index == 0);
+        obj.name = "cameraObj";
+        obj.position.set(trans[0], trans[1], trans[2]);
+        obj.rotation.set(0, Math.PI, 0);
+        poseScene.add(obj);
+      }
+  }
+};
 
 console.log("Initializing");
 const dummy = () => {}
@@ -311,19 +415,21 @@ let camX = 0, camY = 0, camZ = 0;
 slamWorker.onmessage = (e) => {
   if (e.data.operation === "translations") {
     const trans = e.data.translations;
+    latestTrans = e.data.translations;
     console.log("Translations: ", trans[0], trans[1], trans[2], ", ", Date.now() - startTime, "ms");
     document.getElementById("pose1").textContent = trim(trans[0]);
     document.getElementById("pose2").textContent = trim(trans[1]);
     document.getElementById("pose3").textContent = trim(trans[2]);
-    const weight = 0.5;
+    const weight = 1.0;
     if (e.data.result == 0) {
-      camX = (1 - weight) * camX - weight * Number(trans[0]);
-      camY = (1 - weight) * camY - weight * Number(trans[2]);
-      camZ = (1 - weight) * camZ + weight * Number(trans[1]);
-      document.getElementById("pose1s").textContent = camX;
-      document.getElementById("pose2s").textContent = camY;
-      document.getElementById("pose3s").textContent = camZ;
+      camX = (1 - weight) * camX + weight * Number(trans[0]);
+      camY = (1 - weight) * camY - weight * Number(trans[1]);
+      camZ = (1 - weight) * camZ - weight * Number(trans[2]);
+      document.getElementById("pose1s").textContent = trim(camX);
+      document.getElementById("pose2s").textContent = trim(camY);
+      document.getElementById("pose3s").textContent = trim(camZ);
       camera.position.set(camX, camY, camZ);
+      renderPoseFrames();
     }
     document.getElementById("time").textContent = (Date.now() - startTime).toString() + " ms";
     document.getElementById("result").textContent = result == 1? "True" : "False";
@@ -350,6 +456,9 @@ slamWorker.onmessage = (e) => {
     if (e.data.complete == false) {
       console.log("Download complete");
     }
+  } else if (e.data.operation === "keyframes") {
+    keyframeTrans = e.data.translations;
+    renderPoseFrames();
   } else if (e.data.operation === "module_ready") {
     console.log("MODULE READY");
     navigator.mediaDevices.getUserMedia(
@@ -371,5 +480,9 @@ slamWorker.onmessage = (e) => {
       }
     };
     threejsRender();
+    poseRender();
+    setInterval(() => {
+      slamWorker.postMessage({operation: "keyframes"});
+    }, 2000);
   }
 }
